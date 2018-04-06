@@ -20,7 +20,7 @@ the jar to S3
 Use environment variables to configure your Elasticsearch End Point
 
 Example:
-![Image of Yaktocat](lambda-env-setup.png)
+![Env Setup](lambda-env-setup.png)
 
 ## Authorization
 Any credentials (for example Base64 encoded `username:password` pairs under the `Basic` scheme) can he
