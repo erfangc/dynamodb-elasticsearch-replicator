@@ -1,4 +1,4 @@
-package com.aladdin.securities.dynamodbelasticsearch.replicator.converter;
+package com.erfangc.dynamodb.elasticsearch.converter;
 
 import com.amazonaws.services.dynamodbv2.model.AttributeValue;
 import com.fasterxml.jackson.databind.JsonNode;

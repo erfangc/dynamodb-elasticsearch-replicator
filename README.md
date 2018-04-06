@@ -16,7 +16,12 @@ ls target/
 In the lambda page upload the compiled jar (or you can use awscli), or you can pre-upload
 the jar to S3
 
+## Configurations
+Use environment variables to configure your Elasticsearch End Point
+
+Example:
+![Image of Yaktocat](lambda-env-setup.png)
+
 ## Authorization
 Any credentials (for example Base64 encoded `username:password` pairs under the `Basic` scheme) can he
 passed in via the `ES_AUTHORIZATION` environment variable
- 

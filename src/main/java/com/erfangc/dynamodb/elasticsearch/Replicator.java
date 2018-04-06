@@ -1,7 +1,7 @@
-package com.aladdin.securities.dynamodbelasticsearch.replicator;
+package com.erfangc.dynamodb.elasticsearch;
 
-import com.aladdin.securities.dynamodbelasticsearch.replicator.converter.JacksonConverterException;
-import com.aladdin.securities.dynamodbelasticsearch.replicator.converter.JacksonConverterImpl;
+import com.erfangc.dynamodb.elasticsearch.converter.JacksonConverterException;
+import com.erfangc.dynamodb.elasticsearch.converter.JacksonConverterImpl;
 import com.amazonaws.services.dynamodbv2.model.AttributeValue;
 import com.amazonaws.services.dynamodbv2.model.StreamRecord;
 import com.amazonaws.services.lambda.runtime.Context;
@@ -19,6 +19,7 @@ import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
 import java.util.List;
@@ -76,11 +77,11 @@ public class Replicator {
                     JsonNode payload = converter.mapToJsonObject(newImage);
                     final IndexRequest indexRequest = new IndexRequest(INDEX, "_doc", id).source(payload.toString(), XContentType.JSON);
                     bulkRequest.add(indexRequest);
-                    System.out.println("IndexRequest:"+ indexRequest.toString());
+                    System.out.println("IndexRequest:" + indexRequest.toString());
                 } else if (EventType.valueOf(eventName) == EventType.REMOVE) {
                     final DeleteRequest deleteRequest = new DeleteRequest(INDEX, "_doc", id);
                     bulkRequest.add(deleteRequest);
-                    System.out.println("IndexRequest:"+ deleteRequest.toString());
+                    System.out.println("IndexRequest:" + deleteRequest.toString());
                 }
             } catch (JacksonConverterException e) {
                 e.printStackTrace();
@@ -99,6 +100,9 @@ public class Replicator {
             BulkResponse responses = client.bulk(request);
             for (BulkItemResponse bulkItemResponse : responses.getItems()) {
                 System.out.println(bulkItemResponse.getOpType() + " id: " + bulkItemResponse.getItemId() + " status:" + bulkItemResponse.status());
+                if (bulkItemResponse.status() == RestStatus.BAD_REQUEST) {
+                    System.err.println(bulkItemResponse.getFailureMessage());
+                }
             }
         } catch (Exception e) {
             e.printStackTrace();

@@ -1,4 +1,4 @@
-package com.aladdin.securities.dynamodbelasticsearch.replicator.converter;
+package com.erfangc.dynamodb.elasticsearch.converter;
 import java.util.List;
 import java.util.Map;
 

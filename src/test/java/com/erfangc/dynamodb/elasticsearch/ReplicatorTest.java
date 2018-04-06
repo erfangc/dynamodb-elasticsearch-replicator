@@ -1,4 +1,4 @@
-package com.aladdin.securities.dynamodbelasticsearch.replicator;
+package com.erfangc.dynamodb.elasticsearch;
 
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;

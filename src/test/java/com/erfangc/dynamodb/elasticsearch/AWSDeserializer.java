@@ -1,4 +1,4 @@
-package com.aladdin.securities.dynamodbelasticsearch.replicator;
+package com.erfangc.dynamodb.elasticsearch;
 
 import com.amazonaws.services.dynamodbv2.model.OperationType;
 import com.amazonaws.services.dynamodbv2.model.StreamViewType;

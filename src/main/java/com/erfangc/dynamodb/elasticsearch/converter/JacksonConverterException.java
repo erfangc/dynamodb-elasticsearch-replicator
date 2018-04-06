@@ -1,4 +1,4 @@
-package com.aladdin.securities.dynamodbelasticsearch.replicator.converter;
+package com.erfangc.dynamodb.elasticsearch.converter;
 
 /**
  * Exception occurred while transforming between representations.
