@@ -19,6 +19,9 @@ the jar to S3
 ## Configurations
 Use environment variables to configure your Elasticsearch End Point
 
+Handler:
+`com.erfangc.dynamodb.elasticsearch.Replicator::handle`
+
 Example:
 ![Env Setup](lambda-env-setup.png)
 
