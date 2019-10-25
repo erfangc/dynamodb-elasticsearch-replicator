@@ -83,7 +83,7 @@ public class Replicator {
                 create a primary id from record
                  */
                 System.out.println(streamRecord);
-                String id = streamRecord.getKeys().values().stream().map(AttributeValue::getS).collect(joining(":"));
+                String id = getId(streamRecord);
                 if (EventType.valueOf(eventName) == EventType.INSERT || EventType.valueOf(eventName) == EventType.MODIFY) {
                     final Map<String, AttributeValue> newImage = streamRecord.getNewImage();
                     if (newImage == null) {
@@ -99,12 +99,22 @@ public class Replicator {
                     System.out.println("IndexRequest: " + deleteRequest.toString());
                 }
             } catch (JacksonConverterException e) {
-                e.printStackTrace();
+                // JSON conversion exceptions will not succeed on retry, therefore do not throw an error
+                String id = getId(record.getDynamodb());
+                System.err.println("Failed to process record due to serialization issues");
+                System.err.println(
+                        "Failure detail: id=" + id
+                                + " message=" + e.getMessage()
+                );
             }
         }
         System.out.println("Sending bulk request for " + bulkRequest.requests().size() + " requests to Elasticsearch");
         executeElasticsearchRESTRequest(bulkRequest);
         System.out.println("Executed bulk request for " + bulkRequest.requests().size() + " requests to Elasticsearch");
+    }
+
+    private String getId(StreamRecord streamRecord) {
+        return streamRecord.getKeys().values().stream().map(AttributeValue::getS).collect(joining(":"));
     }
 
     private void executeElasticsearchRESTRequest(BulkRequest request) throws IOException {
@@ -123,26 +133,30 @@ public class Replicator {
             }
         }
         if (!failures.isEmpty()) {
-            String message = failures.size() + " out of " + items.length + " requests to Elasticsearch failed";
-            List<IndexFailure> indexFailures = failures
-                    .stream()
-                    .map(
-                            failure -> new IndexFailure()
-                                    .setCause(failure.getCause().getMessage())
-                                    .setId(failure.getId())
-                                    .setIndex(failure.getIndex())
-                                    .setTimestamp(Instant.now().toString())
-                    )
-                    .collect(toList());
-            indexFailures.forEach(
-                    failure -> System.err.println(
-                            "Failure detail: id=" + failure.getId()
-                                    + " message=" + failure.getCause()
-                                    + " index=" + failure.getIndex()
-                    )
-            );
-            throw new RuntimeException(message);
+            System.err.println(failures.size() + " out of " + items.length + " requests to Elasticsearch failed");
+            logFailures(failures);
         }
+    }
+
+    private void logFailures(List<BulkItemResponse.Failure> failures) {
+        List<IndexFailure> indexFailures = failures
+                .stream()
+                .map(
+                        failure -> new IndexFailure()
+                                .setCause(failure.getCause().getMessage())
+                                .setId(failure.getId())
+                                .setIndex(failure.getIndex())
+                                .setTimestamp(Instant.now().toString())
+                )
+                .collect(toList());
+        indexFailures.forEach(
+                failure -> System.err.println(
+                        "Failure detail: id=" + failure.getId()
+                                + " message=" + failure.getCause()
+                                + " index=" + failure.getIndex()
+                )
+        );
+        // 400s from Elasticsearch will not succeed on retry, therefore we do not fail the Lambda
     }
 
 }
