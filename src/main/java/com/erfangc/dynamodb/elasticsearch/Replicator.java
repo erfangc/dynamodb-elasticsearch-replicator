@@ -4,13 +4,19 @@ import com.amazonaws.services.dynamodbv2.model.AttributeValue;
 import com.amazonaws.services.dynamodbv2.model.StreamRecord;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.events.DynamodbEvent;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
+import com.amazonaws.services.sqs.model.SendMessageRequest;
 import com.erfangc.dynamodb.elasticsearch.converter.JacksonConverterException;
 import com.erfangc.dynamodb.elasticsearch.converter.JacksonConverterImpl;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.impl.client.BasicCredentialsProvider;
+import org.elasticsearch.action.DocWriteRequest;
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
@@ -28,6 +34,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static java.lang.Integer.parseInt;
 import static java.util.stream.Collectors.joining;
@@ -50,7 +57,11 @@ public class Replicator {
     private static final String USERNAME = System.getenv("ES_USERNAME");
     private static final String PASSWORD = System.getenv("ES_PASSWORD");
     private static final String INDEX = System.getenv("ES_INDEX");
+    private static final String dlqUrl = System.getenv("DLQ_URL");
+    private static final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+
     private final RestHighLevelClient client;
+    private final AmazonSQS sqs;
 
     public Replicator() {
         BasicCredentialsProvider credentialsProvider = new BasicCredentialsProvider();
@@ -59,6 +70,22 @@ public class Replicator {
                 .builder(new HttpHost(HOST, parseInt(PORT), SCHEME))
                 .setHttpClientConfigCallback(httpAsyncClientBuilder -> httpAsyncClientBuilder.setDefaultCredentialsProvider(credentialsProvider));
         client = new RestHighLevelClient(restClient);
+        sqs = AmazonSQSClientBuilder.defaultClient();
+        List<String> missingEnvVars = Stream.of(
+                "ES_HOST",
+                "ES_PORT",
+                "ES_SCHEME",
+                "ES_USERNAME",
+                "ES_PASSWORD",
+                "ES_INDEX",
+                "DLQ_URL"
+        )
+                .filter(envvar -> System.getenv(envvar) == null)
+                .collect(toList());
+        if (!missingEnvVars.isEmpty()) {
+            System.out.println("Missing environment variables: " + missingEnvVars.toString());
+            System.exit(1);
+        }
     }
 
     public enum EventType {
@@ -114,49 +141,62 @@ public class Replicator {
     }
 
     private String getId(StreamRecord streamRecord) {
-        return streamRecord.getKeys().values().stream().map(AttributeValue::getS).collect(joining(":"));
+        return streamRecord
+                .getKeys()
+                .values()
+                .stream()
+                .map(AttributeValue::getS)
+                .collect(joining(":"));
     }
 
     private void executeElasticsearchRESTRequest(BulkRequest request) throws IOException {
         BulkResponse responses = client.bulk(request, RequestOptions.DEFAULT);
-        List<BulkItemResponse.Failure> failures = new ArrayList<>();
+        List<BadRequest> badRequests = new ArrayList<>();
         BulkItemResponse[] items = responses.getItems();
-        for (BulkItemResponse bulkItemResponse : items) {
+        for (BulkItemResponse itemResponse : items) {
+            int itemId = itemResponse.getItemId();
             System.out.println(
-                    "Response received for operation=" + bulkItemResponse.getOpType()
-                            + " index=" + bulkItemResponse.getIndex()
-                            + " itemId=" + bulkItemResponse.getItemId()
-                            + " status=" + bulkItemResponse.status()
+                    "Response received for operation=" + itemResponse.getOpType()
+                            + " index=" + itemResponse.getIndex()
+                            + " itemId=" + itemId
+                            + " status=" + itemResponse.status()
             );
-            if (bulkItemResponse.status() == RestStatus.BAD_REQUEST) {
-                failures.add(bulkItemResponse.getFailure());
+            if (itemResponse.status() == RestStatus.BAD_REQUEST) {
+                DocWriteRequest<?> docWriteRequest = request.requests().get(itemId);
+                String source = null;
+                if (docWriteRequest instanceof IndexRequest) {
+                    source = ((IndexRequest) docWriteRequest).source().utf8ToString();
+                }
+                BadRequest badRequest = new BadRequest()
+                        .setSource(source)
+                        .setCause(itemResponse.getFailureMessage())
+                        .setIndex(itemResponse.getIndex())
+                        .setId(itemResponse.getId())
+                        .setTimestamp(Instant.now().toString())
+                        .setOpType(itemResponse.getOpType());
+                badRequests.add(badRequest);
             }
         }
-        if (!failures.isEmpty()) {
-            System.err.println(failures.size() + " out of " + items.length + " requests to Elasticsearch failed");
-            logFailures(failures);
+        if (!badRequests.isEmpty()) {
+            System.err.println(badRequests.size() + " out of " + items.length + " requests to Elasticsearch failed");
+            logBadRequests(badRequests);
         }
     }
 
-    private void logFailures(List<BulkItemResponse.Failure> failures) {
-        List<IndexFailure> indexFailures = failures
-                .stream()
-                .map(
-                        failure -> new IndexFailure()
-                                .setCause(failure.getCause().getMessage())
-                                .setId(failure.getId())
-                                .setIndex(failure.getIndex())
-                                .setTimestamp(Instant.now().toString())
-                )
-                .collect(toList());
-        indexFailures.forEach(
-                failure -> System.err.println(
-                        "Failure detail: id=" + failure.getId()
-                                + " message=" + failure.getCause()
-                                + " index=" + failure.getIndex()
-                )
-        );
-        // 400s from Elasticsearch will not succeed on retry, therefore we do not fail the Lambda
+    // 400s from Elasticsearch will not succeed on retry, therefore we do not fail the Lambda
+    private void logBadRequests(List<BadRequest> badRequests) throws JsonProcessingException {
+        for (BadRequest badRequest : badRequests) {
+            System.err.println(
+                    "Failure detail: id=" + badRequest.getId()
+                            + " message=" + badRequest.getCause()
+                            + " index=" + badRequest.getIndex());
+            SendMessageRequest sendMessageRequest = new SendMessageRequest();
+            //
+            // write the failed request to a dead-letter-queue
+            //
+            sendMessageRequest.withQueueUrl(dlqUrl).withMessageBody(objectMapper.writeValueAsString(badRequest));
+            sqs.sendMessage(sendMessageRequest);
+        }
     }
 
 }
